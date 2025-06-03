@@ -17,6 +17,8 @@ import {
   type InsertBotSettings,
   type StatsOverview
 } from "@shared/schema";
+import { db } from "./db";
+import { eq, desc, and, lt } from "drizzle-orm";
 
 export interface IStorage {
   // Exchanges
@@ -44,38 +46,210 @@ export interface IStorage {
   getStatsOverview(): Promise<StatsOverview>;
 }
 
-export class MemStorage implements IStorage {
-  private exchanges: Map<number, Exchange>;
-  private tradingPairs: Map<number, TradingPair>;
-  private arbitrageOpportunities: Map<number, ArbitrageOpportunity>;
-  private transactions: Map<number, Transaction>;
-  private botSettings: BotSettings;
-  private currentId: number;
-
-  constructor() {
-    this.exchanges = new Map();
-    this.tradingPairs = new Map();
-    this.arbitrageOpportunities = new Map();
-    this.transactions = new Map();
-    this.currentId = 1;
-    
-    // Initialize bot settings
-    this.botSettings = {
-      id: 1,
-      minProfitThreshold: "1.5",
-      maxGasPrice: "50",
-      tradeAmount: "1000",
-      slippageTolerance: "0.5",
-      autoExecuteEnabled: true,
-      alertsEnabled: true,
-      updatedAt: new Date()
-    };
-
-    // Initialize default exchanges
-    this.initializeDefaultData();
+export class DatabaseStorage implements IStorage {
+  async getAllExchanges(): Promise<Exchange[]> {
+    const result = await db.select().from(exchanges).where(eq(exchanges.isActive, true));
+    return result;
   }
 
-  private initializeDefaultData() {
+  async createExchange(exchange: InsertExchange): Promise<Exchange> {
+    const [result] = await db.insert(exchanges).values(exchange).returning();
+    return result;
+  }
+
+  async getAllTradingPairs(): Promise<TradingPair[]> {
+    const result = await db.select().from(tradingPairs).where(eq(tradingPairs.isActive, true));
+    return result;
+  }
+
+  async createTradingPair(pair: InsertTradingPair): Promise<TradingPair> {
+    const [result] = await db.insert(tradingPairs).values(pair).returning();
+    return result;
+  }
+
+  async getArbitrageOpportunities(limit = 50): Promise<ArbitrageOpportunityWithDetails[]> {
+    const opportunities = await db
+      .select({
+        id: arbitrageOpportunities.id,
+        tradingPairId: arbitrageOpportunities.tradingPairId,
+        exchangeAId: arbitrageOpportunities.exchangeAId,
+        exchangeBId: arbitrageOpportunities.exchangeBId,
+        priceA: arbitrageOpportunities.priceA,
+        priceB: arbitrageOpportunities.priceB,
+        profitMargin: arbitrageOpportunities.profitMargin,
+        estimatedProfit: arbitrageOpportunities.estimatedProfit,
+        gasEstimate: arbitrageOpportunities.gasEstimate,
+        isExecutable: arbitrageOpportunities.isExecutable,
+        createdAt: arbitrageOpportunities.createdAt,
+        tradingPair: tradingPairs,
+        exchangeA: {
+          id: exchanges.id,
+          name: exchanges.name,
+          apiUrl: exchanges.apiUrl,
+          isActive: exchanges.isActive,
+        },
+        exchangeB: {
+          id: exchanges.id,
+          name: exchanges.name,
+          apiUrl: exchanges.apiUrl,
+          isActive: exchanges.isActive,
+        }
+      })
+      .from(arbitrageOpportunities)
+      .leftJoin(tradingPairs, eq(arbitrageOpportunities.tradingPairId, tradingPairs.id))
+      .leftJoin(exchanges, eq(arbitrageOpportunities.exchangeAId, exchanges.id))
+      .orderBy(desc(arbitrageOpportunities.createdAt))
+      .limit(limit);
+
+    // Fix the join issue by querying separately for exchanges
+    const result = await Promise.all(
+      opportunities.map(async (opp) => {
+        const [exchangeA] = await db.select().from(exchanges).where(eq(exchanges.id, opp.exchangeAId));
+        const [exchangeB] = await db.select().from(exchanges).where(eq(exchanges.id, opp.exchangeBId));
+        
+        return {
+          id: opp.id,
+          tradingPairId: opp.tradingPairId,
+          exchangeAId: opp.exchangeAId,
+          exchangeBId: opp.exchangeBId,
+          priceA: opp.priceA,
+          priceB: opp.priceB,
+          profitMargin: opp.profitMargin,
+          estimatedProfit: opp.estimatedProfit,
+          gasEstimate: opp.gasEstimate,
+          isExecutable: opp.isExecutable,
+          createdAt: opp.createdAt,
+          tradingPair: opp.tradingPair!,
+          exchangeA: exchangeA,
+          exchangeB: exchangeB,
+        };
+      })
+    );
+
+    return result;
+  }
+
+  async createArbitrageOpportunity(opportunity: InsertArbitrageOpportunity): Promise<ArbitrageOpportunity> {
+    const [result] = await db.insert(arbitrageOpportunities).values(opportunity).returning();
+    return result;
+  }
+
+  async clearOldOpportunities(): Promise<void> {
+    const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
+    await db.delete(arbitrageOpportunities).where(lt(arbitrageOpportunities.createdAt, oneHourAgo));
+  }
+
+  async getRecentTransactions(limit = 10): Promise<Transaction[]> {
+    const result = await db
+      .select()
+      .from(transactions)
+      .orderBy(desc(transactions.executedAt))
+      .limit(limit);
+    return result;
+  }
+
+  async createTransaction(transaction: InsertTransaction): Promise<Transaction> {
+    const [result] = await db.insert(transactions).values(transaction).returning();
+    return result;
+  }
+
+  async getBotSettings(): Promise<BotSettings> {
+    let [settings] = await db.select().from(botSettings).limit(1);
+    
+    if (!settings) {
+      // Create default settings if none exist
+      [settings] = await db
+        .insert(botSettings)
+        .values({
+          minProfitThreshold: "1.5",
+          maxGasPrice: "50",
+          tradeAmount: "1000",
+          slippageTolerance: "0.5",
+          autoExecuteEnabled: true,
+          alertsEnabled: true,
+        })
+        .returning();
+    }
+    
+    return settings;
+  }
+
+  async updateBotSettings(newSettings: Partial<InsertBotSettings>): Promise<BotSettings> {
+    const [settings] = await db.select().from(botSettings).limit(1);
+    
+    if (settings) {
+      const [updated] = await db
+        .update(botSettings)
+        .set({
+          ...newSettings,
+          updatedAt: new Date(),
+        })
+        .where(eq(botSettings.id, settings.id))
+        .returning();
+      return updated;
+    } else {
+      const [created] = await db
+        .insert(botSettings)
+        .values({
+          minProfitThreshold: "1.5",
+          maxGasPrice: "50",
+          tradeAmount: "1000",
+          slippageTolerance: "0.5",
+          autoExecuteEnabled: true,
+          alertsEnabled: true,
+          ...newSettings,
+        })
+        .returning();
+      return created;
+    }
+  }
+
+  async getStatsOverview(): Promise<StatsOverview> {
+    const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    
+    const recentTransactions = await db
+      .select()
+      .from(transactions)
+      .where(and(eq(transactions.status, 'success'), lt(transactions.executedAt, new Date())));
+    
+    const recentSuccessfulTransactions = recentTransactions.filter(
+      tx => new Date(tx.executedAt) > oneDayAgo && tx.status === 'success'
+    );
+    
+    const totalProfit24h = recentSuccessfulTransactions
+      .filter(tx => tx.actualProfit)
+      .reduce((sum, tx) => sum + parseFloat(tx.actualProfit!), 0);
+    
+    const gasSpent24h = recentTransactions
+      .filter(tx => tx.gasUsed && new Date(tx.executedAt) > oneDayAgo)
+      .reduce((sum, tx) => sum + parseFloat(tx.gasUsed!), 0);
+    
+    const recent24hTxs = recentTransactions.filter(tx => new Date(tx.executedAt) > oneDayAgo);
+    const successfulTxs = recent24hTxs.filter(tx => tx.status === 'success').length;
+    const successRate = recent24hTxs.length > 0 
+      ? (successfulTxs / recent24hTxs.length) * 100 
+      : 0;
+
+    const activeOpportunities = await db.select().from(arbitrageOpportunities);
+    const allPairs = await db.select().from(tradingPairs);
+
+    return {
+      totalProfit24h,
+      activeOpportunities: activeOpportunities.length,
+      successRate,
+      gasSpent24h,
+      scannedPairs: allPairs.length
+    };
+  }
+
+  // Initialize default data
+  async initializeDefaultData() {
+    // Check if data already exists
+    const existingExchanges = await db.select().from(exchanges).limit(1);
+    if (existingExchanges.length > 0) {
+      return; // Data already initialized
+    }
+
     const defaultExchanges = [
       { name: "QuickSwap", apiUrl: "https://api.quickswap.exchange", isActive: true },
       { name: "SushiSwap", apiUrl: "https://api.sushi.com", isActive: true },
@@ -85,10 +259,7 @@ export class MemStorage implements IStorage {
       { name: "1inch", apiUrl: "https://api.1inch.dev", isActive: true }
     ];
 
-    defaultExchanges.forEach(exchange => {
-      const id = this.currentId++;
-      this.exchanges.set(id, { ...exchange, id });
-    });
+    await db.insert(exchanges).values(defaultExchanges);
 
     const defaultPairs = [
       { baseSymbol: "BTC", quoteSymbol: "USDC", name: "BTC/USDC", isActive: true },
@@ -98,125 +269,8 @@ export class MemStorage implements IStorage {
       { baseSymbol: "LINK", quoteSymbol: "ETH", name: "LINK/ETH", isActive: true }
     ];
 
-    defaultPairs.forEach(pair => {
-      const id = this.currentId++;
-      this.tradingPairs.set(id, { ...pair, id });
-    });
-  }
-
-  async getAllExchanges(): Promise<Exchange[]> {
-    return Array.from(this.exchanges.values()).filter(e => e.isActive);
-  }
-
-  async createExchange(exchange: InsertExchange): Promise<Exchange> {
-    const id = this.currentId++;
-    const newExchange = { ...exchange, id };
-    this.exchanges.set(id, newExchange);
-    return newExchange;
-  }
-
-  async getAllTradingPairs(): Promise<TradingPair[]> {
-    return Array.from(this.tradingPairs.values()).filter(p => p.isActive);
-  }
-
-  async createTradingPair(pair: InsertTradingPair): Promise<TradingPair> {
-    const id = this.currentId++;
-    const newPair = { ...pair, id };
-    this.tradingPairs.set(id, newPair);
-    return newPair;
-  }
-
-  async getArbitrageOpportunities(limit = 50): Promise<ArbitrageOpportunityWithDetails[]> {
-    const opportunities = Array.from(this.arbitrageOpportunities.values())
-      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
-      .slice(0, limit);
-
-    return opportunities.map(opp => ({
-      ...opp,
-      tradingPair: this.tradingPairs.get(opp.tradingPairId)!,
-      exchangeA: this.exchanges.get(opp.exchangeAId)!,
-      exchangeB: this.exchanges.get(opp.exchangeBId)!
-    }));
-  }
-
-  async createArbitrageOpportunity(opportunity: InsertArbitrageOpportunity): Promise<ArbitrageOpportunity> {
-    const id = this.currentId++;
-    const newOpportunity = { 
-      ...opportunity, 
-      id, 
-      createdAt: new Date() 
-    };
-    this.arbitrageOpportunities.set(id, newOpportunity);
-    return newOpportunity;
-  }
-
-  async clearOldOpportunities(): Promise<void> {
-    const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
-    for (const [id, opp] of this.arbitrageOpportunities.entries()) {
-      if (new Date(opp.createdAt) < oneHourAgo) {
-        this.arbitrageOpportunities.delete(id);
-      }
-    }
-  }
-
-  async getRecentTransactions(limit = 10): Promise<Transaction[]> {
-    return Array.from(this.transactions.values())
-      .sort((a, b) => new Date(b.executedAt).getTime() - new Date(a.executedAt).getTime())
-      .slice(0, limit);
-  }
-
-  async createTransaction(transaction: InsertTransaction): Promise<Transaction> {
-    const id = this.currentId++;
-    const newTransaction = { 
-      ...transaction, 
-      id, 
-      executedAt: new Date() 
-    };
-    this.transactions.set(id, newTransaction);
-    return newTransaction;
-  }
-
-  async getBotSettings(): Promise<BotSettings> {
-    return this.botSettings;
-  }
-
-  async updateBotSettings(settings: Partial<InsertBotSettings>): Promise<BotSettings> {
-    this.botSettings = {
-      ...this.botSettings,
-      ...settings,
-      updatedAt: new Date()
-    };
-    return this.botSettings;
-  }
-
-  async getStatsOverview(): Promise<StatsOverview> {
-    const transactions = await this.getRecentTransactions(1000);
-    const opportunities = await this.getArbitrageOpportunities(1000);
-    
-    const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
-    const recentTransactions = transactions.filter(tx => new Date(tx.executedAt) > oneDayAgo);
-    
-    const totalProfit24h = recentTransactions
-      .filter(tx => tx.status === 'success' && tx.actualProfit)
-      .reduce((sum, tx) => sum + parseFloat(tx.actualProfit!), 0);
-    
-    const gasSpent24h = recentTransactions
-      .filter(tx => tx.gasUsed)
-      .reduce((sum, tx) => sum + parseFloat(tx.gasUsed!), 0);
-    
-    const successfulTxs = recentTransactions.filter(tx => tx.status === 'success').length;
-    const successRate = recentTransactions.length > 0 
-      ? (successfulTxs / recentTransactions.length) * 100 
-      : 0;
-
-    return {
-      totalProfit24h,
-      activeOpportunities: opportunities.length,
-      successRate,
-      gasSpent24h,
-      scannedPairs: this.tradingPairs.size
-    };
+    await db.insert(tradingPairs).values(defaultPairs);
   }
 }
 
-export const storage = new MemStorage();
+export const storage = new DatabaseStorage();

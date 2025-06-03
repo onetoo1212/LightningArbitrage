@@ -243,7 +243,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Start background job to calculate opportunities every 30 seconds
   const interval = setInterval(calculateArbitrageOpportunities, 30000);
   
-  // Initial calculation
+  // Initialize default data and start calculations
+  await storage.initializeDefaultData();
   calculateArbitrageOpportunities();
 
   const httpServer = createServer(app);
