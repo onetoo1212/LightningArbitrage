@@ -1,12 +1,13 @@
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Filter, RefreshCw, Play } from "lucide-react";
+import { Filter, RefreshCw, Play, Download } from "lucide-react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient } from "@/lib/queryClient";
 import { useState } from "react";
 import type { ArbitrageOpportunityWithDetails } from "@shared/schema";
 import { useToast } from "@/hooks/use-toast";
+import ExportModal from "@/components/export-modal";
 
 interface ArbitrageOpportunitiesProps {
   onRefresh: () => void;
@@ -14,6 +15,7 @@ interface ArbitrageOpportunitiesProps {
 
 export default function ArbitrageOpportunities({ onRefresh }: ArbitrageOpportunitiesProps) {
   const [filter, setFilter] = useState("all");
+  const [showExportModal, setShowExportModal] = useState(false);
   const { toast } = useToast();
 
   const { data: opportunities = [], isLoading, refetch } = useQuery<ArbitrageOpportunityWithDetails[]>({
@@ -104,6 +106,15 @@ export default function ArbitrageOpportunities({ onRefresh }: ArbitrageOpportuni
                 </SelectContent>
               </Select>
             </div>
+            
+            <Button 
+              onClick={() => setShowExportModal(true)}
+              variant="outline"
+              className="border-accent-cyan text-accent-cyan hover:bg-accent-cyan/10"
+            >
+              <Download className="w-4 h-4 mr-2" />
+              <span className="hidden sm:inline">Export</span>
+            </Button>
             
             <Button 
               onClick={handleRefresh}
@@ -226,6 +237,12 @@ export default function ArbitrageOpportunities({ onRefresh }: ArbitrageOpportuni
           </table>
         </div>
       </CardContent>
+      
+      <ExportModal 
+        isOpen={showExportModal}
+        onClose={() => setShowExportModal(false)}
+        opportunities={filteredOpportunities}
+      />
     </Card>
   );
 }

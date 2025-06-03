@@ -240,6 +240,182 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Export opportunities endpoint
+  app.post("/api/export", async (req, res) => {
+    try {
+      const { format, platform, opportunityIds } = req.body;
+      
+      let opportunities;
+      if (opportunityIds && opportunityIds.length > 0) {
+        // Export specific opportunities
+        const allOpportunities = await storage.getArbitrageOpportunities(1000);
+        opportunities = allOpportunities.filter(opp => opportunityIds.includes(opp.id));
+      } else {
+        // Export all opportunities
+        opportunities = await storage.getArbitrageOpportunities(1000);
+      }
+
+      if (opportunities.length === 0) {
+        return res.status(404).json({ error: "No opportunities found to export" });
+      }
+
+      let exportData;
+      let filename;
+      let contentType;
+
+      switch (format) {
+        case 'csv':
+          const csvHeader = 'Trading Pair,Exchange A,Price A,Exchange B,Price B,Profit Margin,Estimated Profit,Gas Estimate,Created At\n';
+          const csvRows = opportunities.map(opp => [
+            opp.tradingPair.name,
+            opp.exchangeA.name,
+            opp.priceA,
+            opp.exchangeB.name,
+            opp.priceB,
+            `${opp.profitMargin}%`,
+            `$${opp.estimatedProfit}`,
+            `$${opp.gasEstimate}`,
+            new Date(opp.createdAt).toISOString()
+          ].join(',')).join('\n');
+          
+          exportData = csvHeader + csvRows;
+          filename = `arbitrage_opportunities_${Date.now()}.csv`;
+          contentType = 'text/csv';
+          break;
+
+        case 'json':
+          exportData = JSON.stringify({
+            exported_at: new Date().toISOString(),
+            platform: platform || 'generic',
+            total_opportunities: opportunities.length,
+            opportunities: opportunities.map(opp => ({
+              id: opp.id,
+              trading_pair: {
+                symbol: opp.tradingPair.name,
+                base: opp.tradingPair.baseSymbol,
+                quote: opp.tradingPair.quoteSymbol
+              },
+              arbitrage: {
+                exchange_a: {
+                  name: opp.exchangeA.name,
+                  price: parseFloat(opp.priceA)
+                },
+                exchange_b: {
+                  name: opp.exchangeB.name,
+                  price: parseFloat(opp.priceB)
+                },
+                profit_margin_percent: parseFloat(opp.profitMargin),
+                estimated_profit_usd: parseFloat(opp.estimatedProfit),
+                gas_estimate_usd: parseFloat(opp.gasEstimate),
+                is_executable: opp.isExecutable
+              },
+              created_at: opp.createdAt,
+              execution_ready: opp.isExecutable && parseFloat(opp.profitMargin) > 1.5
+            }))
+          }, null, 2);
+          filename = `arbitrage_opportunities_${Date.now()}.json`;
+          contentType = 'application/json';
+          break;
+
+        case 'tradingview':
+          // TradingView-compatible format
+          exportData = JSON.stringify({
+            symbols: opportunities.map(opp => ({
+              symbol: opp.tradingPair.baseSymbol + opp.tradingPair.quoteSymbol,
+              exchange_a: opp.exchangeA.name,
+              exchange_b: opp.exchangeB.name,
+              price_diff: parseFloat(opp.priceA) - parseFloat(opp.priceB),
+              profit_percentage: parseFloat(opp.profitMargin)
+            }))
+          }, null, 2);
+          filename = `tradingview_signals_${Date.now()}.json`;
+          contentType = 'application/json';
+          break;
+
+        case '3commas':
+          // 3Commas DCA bot format
+          exportData = JSON.stringify({
+            bots: opportunities.filter(opp => opp.isExecutable).map(opp => ({
+              name: `Arbitrage ${opp.tradingPair.name}`,
+              pair: opp.tradingPair.baseSymbol + '_' + opp.tradingPair.quoteSymbol,
+              strategy: 'arbitrage',
+              base_order_volume: parseFloat(opp.estimatedProfit) * 10, // 10x profit as base volume
+              take_profit: parseFloat(opp.profitMargin),
+              max_active_deals: 1,
+              exchanges: [opp.exchangeA.name, opp.exchangeB.name]
+            }))
+          }, null, 2);
+          filename = `3commas_bots_${Date.now()}.json`;
+          contentType = 'application/json';
+          break;
+
+        default:
+          return res.status(400).json({ error: "Unsupported export format" });
+      }
+
+      res.setHeader('Content-Type', contentType);
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      res.send(exportData);
+
+    } catch (error) {
+      console.error("Export error:", error);
+      res.status(500).json({ error: "Failed to export opportunities" });
+    }
+  });
+
+  // Get available trading platforms
+  app.get("/api/trading-platforms", async (req, res) => {
+    try {
+      const platforms = [
+        {
+          name: "TradingView",
+          icon: "📈",
+          supportedFormats: ["json", "csv"],
+          requiredFields: ["symbol", "exchange", "signal"],
+          description: "Export signals for TradingView alerts"
+        },
+        {
+          name: "3Commas",
+          icon: "🤖",
+          supportedFormats: ["json"],
+          requiredFields: ["pair", "strategy", "take_profit"],
+          description: "Create DCA bots for automated trading"
+        },
+        {
+          name: "MetaTrader 5",
+          icon: "📊",
+          supportedFormats: ["csv", "json"],
+          requiredFields: ["symbol", "action", "volume"],
+          description: "Import into MT5 Expert Advisors"
+        },
+        {
+          name: "Binance",
+          icon: "🔶",
+          supportedFormats: ["json", "api"],
+          requiredFields: ["symbol", "side", "quantity"],
+          description: "Direct API integration with Binance"
+        },
+        {
+          name: "Generic CSV",
+          icon: "📄",
+          supportedFormats: ["csv"],
+          requiredFields: [],
+          description: "Standard CSV format for any platform"
+        },
+        {
+          name: "JSON Export",
+          icon: "🔗",
+          supportedFormats: ["json"],
+          requiredFields: [],
+          description: "Raw JSON data for custom integrations"
+        }
+      ];
+      res.json(platforms);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch trading platforms" });
+    }
+  });
+
   // Start background job to calculate opportunities every 30 seconds
   const interval = setInterval(calculateArbitrageOpportunities, 30000);
   
