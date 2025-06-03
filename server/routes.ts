@@ -553,6 +553,158 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // API Documentation endpoint
+  app.get("/api/docs", async (req, res) => {
+    try {
+      const documentation = {
+        title: "FlashBot Arbitrage API Documentation",
+        version: "1.0.0",
+        description: "Complete API for cryptocurrency arbitrage opportunities and trading platform exports",
+        baseUrl: `${req.protocol}://${req.get('host')}/api`,
+        endpoints: {
+          opportunities: {
+            method: "GET",
+            path: "/opportunities",
+            description: "Get all arbitrage opportunities with detailed exchange and trading pair information",
+            parameters: {
+              limit: "Optional. Maximum number of opportunities to return (default: 50)"
+            },
+            response: "Array of opportunities with profit margins, exchanges, and execution status"
+          },
+          export: {
+            method: "POST",
+            path: "/export",
+            description: "Export opportunities in various formats for trading platforms",
+            body: {
+              format: "Required. Export format: csv, json, tradingview, 3commas, metatrader, binance",
+              platform: "Required. Target platform name",
+              opportunityIds: "Optional. Array of specific opportunity IDs to export"
+            },
+            response: "File download with formatted data"
+          },
+          webhook: {
+            method: "POST",
+            path: "/export/webhook",
+            description: "Send opportunities data to webhook endpoint in real-time",
+            body: {
+              webhookUrl: "Required. Target webhook URL",
+              format: "Optional. Data format (default: json)",
+              platform: "Optional. Platform identifier",
+              filterCriteria: {
+                minProfitMargin: "Optional. Minimum profit percentage",
+                onlyExecutable: "Optional. Filter for executable opportunities only",
+                exchanges: "Optional. Array of exchange names to include"
+              }
+            },
+            response: "Success confirmation with opportunities sent count"
+          },
+          statistics: {
+            method: "GET",
+            path: "/stats",
+            description: "Get comprehensive statistics and performance metrics",
+            response: "Profit, success rate, active opportunities, and other metrics"
+          },
+          settings: {
+            method: "GET/POST",
+            path: "/settings",
+            description: "Get or update bot configuration settings",
+            response: "Bot settings including profit thresholds and execution parameters"
+          }
+        },
+        exportFormats: {
+          csv: "Standard comma-separated values for spreadsheet applications",
+          json: "Structured JSON data for API integrations",
+          tradingview: "TradingView-compatible format for alerts and signals",
+          "3commas": "3Commas DCA bot configuration format",
+          metatrader: "MetaTrader 5 Expert Advisor compatible CSV",
+          binance: "Binance API-compatible order format"
+        },
+        webhookPayload: {
+          timestamp: "ISO 8601 timestamp of export",
+          platform: "Target platform identifier",
+          total_opportunities: "Number of opportunities included",
+          opportunities: [
+            {
+              id: "Unique opportunity identifier",
+              trading_pair: "Symbol name (e.g., BTC/USDC)",
+              exchange_a: "First exchange name",
+              exchange_b: "Second exchange name",
+              price_a: "Price on first exchange",
+              price_b: "Price on second exchange",
+              profit_margin: "Profit percentage",
+              estimated_profit: "Estimated profit in USD",
+              is_executable: "Boolean execution readiness",
+              created_at: "Opportunity discovery timestamp"
+            }
+          ]
+        },
+        rateLimits: {
+          export: "10 requests per minute",
+          webhook: "5 requests per minute",
+          general: "100 requests per minute"
+        },
+        authentication: "No authentication required for read operations. Export operations may have usage limits.",
+        examples: {
+          curlExport: `curl -X POST ${req.protocol}://${req.get('host')}/api/export \\
+  -H "Content-Type: application/json" \\
+  -d '{"format": "json", "platform": "generic"}' \\
+  --output arbitrage_opportunities.json`,
+          webhookIntegration: `curl -X POST ${req.protocol}://${req.get('host')}/api/export/webhook \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "webhookUrl": "https://your-server.com/webhook",
+    "filterCriteria": {
+      "minProfitMargin": 2.0,
+      "onlyExecutable": true
+    }
+  }'`
+        }
+      };
+      
+      res.json(documentation);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to generate API documentation" });
+    }
+  });
+
+  // Export analytics endpoint
+  app.get("/api/export/analytics", async (req, res) => {
+    try {
+      const analytics = await storage.getExportAnalytics();
+      res.json(analytics);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch export analytics" });
+    }
+  });
+
+  // Export status and health check
+  app.get("/api/health", async (req, res) => {
+    try {
+      const stats = await storage.getStatsOverview();
+      const uptime = process.uptime();
+      
+      res.json({
+        status: "healthy",
+        uptime: `${Math.floor(uptime / 3600)}h ${Math.floor((uptime % 3600) / 60)}m`,
+        database: "connected",
+        activeOpportunities: stats.activeOpportunities,
+        exportFormats: ["csv", "json", "tradingview", "3commas", "metatrader", "binance"],
+        features: {
+          realTimeData: true,
+          webhookIntegration: true,
+          multiPlatformExport: true,
+          scheduledExports: true
+        },
+        timestamp: new Date().toISOString()
+      });
+    } catch (error) {
+      res.status(503).json({ 
+        status: "unhealthy", 
+        error: "Service temporarily unavailable" 
+      });
+    }
+  });
+
   // Start background job to calculate opportunities every 30 seconds
   const interval = setInterval(calculateArbitrageOpportunities, 30000);
   

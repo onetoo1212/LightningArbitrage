@@ -142,3 +142,20 @@ export interface TradingPlatformConfig {
   icon: string;
   description: string;
 }
+
+export const exportLogs = pgTable("export_logs", {
+  id: serial("id").primaryKey(),
+  format: text("format").notNull(),
+  platform: text("platform").notNull(),
+  opportunitiesCount: integer("opportunities_count").notNull(),
+  fileSize: integer("file_size"),
+  executionTime: integer("execution_time_ms"),
+  success: boolean("success").default(true).notNull(),
+  errorMessage: text("error_message"),
+  userAgent: text("user_agent"),
+  ipAddress: text("ip_address"),
+  exportedAt: timestamp("exported_at").defaultNow().notNull(),
+});
+
+export type ExportLog = typeof exportLogs.$inferSelect;
+export type InsertExportLog = typeof exportLogs.$inferInsert;

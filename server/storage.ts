@@ -4,21 +4,24 @@ import {
   arbitrageOpportunities, 
   transactions, 
   botSettings,
+  exportLogs,
   type Exchange, 
   type TradingPair, 
   type ArbitrageOpportunity,
   type ArbitrageOpportunityWithDetails,
   type Transaction, 
   type BotSettings,
+  type ExportLog,
   type InsertExchange, 
   type InsertTradingPair, 
   type InsertArbitrageOpportunity,
   type InsertTransaction, 
   type InsertBotSettings,
+  type InsertExportLog,
   type StatsOverview
 } from "@shared/schema";
 import { db } from "./db";
-import { eq, desc, and, lt } from "drizzle-orm";
+import { eq, desc, and, lt, gt } from "drizzle-orm";
 
 export interface IStorage {
   // Exchanges
@@ -44,6 +47,10 @@ export interface IStorage {
   
   // Statistics
   getStatsOverview(): Promise<StatsOverview>;
+  
+  // Export Logs
+  logExport(exportLog: InsertExportLog): Promise<ExportLog>;
+  getExportAnalytics(): Promise<any>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -270,6 +277,56 @@ export class DatabaseStorage implements IStorage {
     ];
 
     await db.insert(tradingPairs).values(defaultPairs);
+  }
+
+  async logExport(exportLog: InsertExportLog): Promise<ExportLog> {
+    const [result] = await db.insert(exportLogs).values(exportLog).returning();
+    return result;
+  }
+
+  async getExportAnalytics(): Promise<any> {
+    const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const oneWeekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+    
+    // Get export statistics
+    const recentExports = await db
+      .select()
+      .from(exportLogs)
+      .where(and(eq(exportLogs.success, true), lt(oneDayAgo, exportLogs.exportedAt)));
+    
+    const weeklyExports = await db
+      .select()
+      .from(exportLogs)
+      .where(and(eq(exportLogs.success, true), lt(oneWeekAgo, exportLogs.exportedAt)));
+
+    // Calculate analytics
+    const formatStats = recentExports.reduce((acc, log) => {
+      acc[log.format] = (acc[log.format] || 0) + 1;
+      return acc;
+    }, {} as Record<string, number>);
+
+    const platformStats = recentExports.reduce((acc, log) => {
+      acc[log.platform] = (acc[log.platform] || 0) + 1;
+      return acc;
+    }, {} as Record<string, number>);
+
+    const avgOpportunitiesPerExport = recentExports.length > 0 
+      ? recentExports.reduce((sum, log) => sum + log.opportunitiesCount, 0) / recentExports.length 
+      : 0;
+
+    const avgExecutionTime = recentExports
+      .filter(log => log.executionTime)
+      .reduce((sum, log, _, arr) => sum + (log.executionTime! / arr.length), 0);
+
+    return {
+      exports24h: recentExports.length,
+      exportsWeekly: weeklyExports.length,
+      popularFormats: formatStats,
+      popularPlatforms: platformStats,
+      avgOpportunitiesPerExport: Math.round(avgOpportunitiesPerExport),
+      avgExecutionTimeMs: Math.round(avgExecutionTime),
+      totalDataExported: recentExports.reduce((sum, log) => sum + log.opportunitiesCount, 0)
+    };
   }
 }
 
