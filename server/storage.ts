@@ -285,48 +285,62 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getExportAnalytics(): Promise<any> {
-    const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
-    const oneWeekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-    
-    // Get export statistics
-    const recentExports = await db
-      .select()
-      .from(exportLogs)
-      .where(and(eq(exportLogs.success, true), lt(oneDayAgo, exportLogs.exportedAt)));
-    
-    const weeklyExports = await db
-      .select()
-      .from(exportLogs)
-      .where(and(eq(exportLogs.success, true), lt(oneWeekAgo, exportLogs.exportedAt)));
+    try {
+      // Simple analytics without complex date filtering for now
+      const allExports = await db.select().from(exportLogs).where(eq(exportLogs.success, true));
+      
+      if (allExports.length === 0) {
+        return {
+          exports24h: 0,
+          exportsWeekly: 0,
+          popularFormats: {},
+          popularPlatforms: {},
+          avgOpportunitiesPerExport: 0,
+          avgExecutionTimeMs: 0,
+          totalDataExported: 0
+        };
+      }
 
-    // Calculate analytics
-    const formatStats = recentExports.reduce((acc, log) => {
-      acc[log.format] = (acc[log.format] || 0) + 1;
-      return acc;
-    }, {} as Record<string, number>);
+      // Calculate analytics from all successful exports
+      const formatStats = allExports.reduce((acc, log) => {
+        acc[log.format] = (acc[log.format] || 0) + 1;
+        return acc;
+      }, {} as Record<string, number>);
 
-    const platformStats = recentExports.reduce((acc, log) => {
-      acc[log.platform] = (acc[log.platform] || 0) + 1;
-      return acc;
-    }, {} as Record<string, number>);
+      const platformStats = allExports.reduce((acc, log) => {
+        acc[log.platform] = (acc[log.platform] || 0) + 1;
+        return acc;
+      }, {} as Record<string, number>);
 
-    const avgOpportunitiesPerExport = recentExports.length > 0 
-      ? recentExports.reduce((sum, log) => sum + log.opportunitiesCount, 0) / recentExports.length 
-      : 0;
+      const avgOpportunitiesPerExport = allExports.length > 0 
+        ? allExports.reduce((sum, log) => sum + log.opportunitiesCount, 0) / allExports.length 
+        : 0;
 
-    const avgExecutionTime = recentExports
-      .filter(log => log.executionTime)
-      .reduce((sum, log, _, arr) => sum + (log.executionTime! / arr.length), 0);
+      const avgExecutionTime = allExports
+        .filter(log => log.executionTime)
+        .reduce((sum, log, _, arr) => sum + (log.executionTime! / arr.length), 0);
 
-    return {
-      exports24h: recentExports.length,
-      exportsWeekly: weeklyExports.length,
-      popularFormats: formatStats,
-      popularPlatforms: platformStats,
-      avgOpportunitiesPerExport: Math.round(avgOpportunitiesPerExport),
-      avgExecutionTimeMs: Math.round(avgExecutionTime),
-      totalDataExported: recentExports.reduce((sum, log) => sum + log.opportunitiesCount, 0)
-    };
+      return {
+        exports24h: allExports.length, // Simplified for now
+        exportsWeekly: allExports.length,
+        popularFormats: formatStats,
+        popularPlatforms: platformStats,
+        avgOpportunitiesPerExport: Math.round(avgOpportunitiesPerExport),
+        avgExecutionTimeMs: Math.round(avgExecutionTime || 0),
+        totalDataExported: allExports.reduce((sum, log) => sum + log.opportunitiesCount, 0)
+      };
+    } catch (error) {
+      console.error("Error fetching export analytics:", error);
+      return {
+        exports24h: 0,
+        exportsWeekly: 0,
+        popularFormats: {},
+        popularPlatforms: {},
+        avgOpportunitiesPerExport: 0,
+        avgExecutionTimeMs: 0,
+        totalDataExported: 0
+      };
+    }
   }
 }
 

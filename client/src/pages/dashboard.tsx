@@ -4,6 +4,7 @@ import ArbitrageOpportunities from "@/components/arbitrage-opportunities";
 import ProfitChart from "@/components/profit-chart";
 import RecentTransactions from "@/components/recent-transactions";
 import BotSettings from "@/components/bot-settings";
+import ExportAnalytics from "@/components/export-analytics";
 import { Button } from "@/components/ui/button";
 import { useArbitrageData } from "@/hooks/use-arbitrage-data";
 import { useState } from "react";
@@ -69,6 +70,7 @@ export default function Dashboard() {
           <RecentTransactions />
         </div>
         
+        <ExportAnalytics />
         <BotSettings />
       </main>
 
