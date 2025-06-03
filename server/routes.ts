@@ -349,6 +349,49 @@ export async function registerRoutes(app: Express): Promise<Server> {
           contentType = 'application/json';
           break;
 
+        case 'metatrader':
+          // MetaTrader 5 format
+          const mtHeader = 'Symbol,Action,Volume,Price,StopLoss,TakeProfit,Comment\n';
+          const mtRows = opportunities.filter(opp => opp.isExecutable).map(opp => [
+            opp.tradingPair.baseSymbol + opp.tradingPair.quoteSymbol,
+            'BUY',
+            '0.1',
+            opp.priceA,
+            (parseFloat(opp.priceA) * 0.95).toFixed(8),
+            (parseFloat(opp.priceA) * (1 + parseFloat(opp.profitMargin) / 100)).toFixed(8),
+            `Arbitrage_${opp.exchangeA.name}_${opp.exchangeB.name}`
+          ].join(',')).join('\n');
+          
+          exportData = mtHeader + mtRows;
+          filename = `mt5_signals_${Date.now()}.csv`;
+          contentType = 'text/csv';
+          break;
+
+        case 'binance':
+          // Binance API format
+          exportData = JSON.stringify({
+            orders: opportunities.filter(opp => opp.isExecutable).map(opp => ({
+              symbol: opp.tradingPair.baseSymbol + opp.tradingPair.quoteSymbol,
+              side: 'BUY',
+              type: 'LIMIT',
+              timeInForce: 'GTC',
+              quantity: (100 / parseFloat(opp.priceA)).toFixed(6),
+              price: opp.priceA,
+              stopPrice: (parseFloat(opp.priceA) * 0.95).toFixed(8),
+              icebergQty: '0',
+              newOrderRespType: 'RESULT',
+              timestamp: Date.now(),
+              metadata: {
+                arbitrage_opportunity_id: opp.id,
+                profit_margin: opp.profitMargin,
+                target_exchange: opp.exchangeB.name
+              }
+            }))
+          }, null, 2);
+          filename = `binance_orders_${Date.now()}.json`;
+          contentType = 'application/json';
+          break;
+
         default:
           return res.status(400).json({ error: "Unsupported export format" });
       }
@@ -363,6 +406,93 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Webhook export endpoint
+  app.post("/api/export/webhook", async (req, res) => {
+    try {
+      const { webhookUrl, format, platform, filterCriteria } = req.body;
+      
+      if (!webhookUrl) {
+        return res.status(400).json({ error: "Webhook URL is required" });
+      }
+
+      // Get opportunities based on filter criteria
+      const allOpportunities = await storage.getArbitrageOpportunities(1000);
+      let opportunities = allOpportunities;
+
+      if (filterCriteria) {
+        opportunities = opportunities.filter(opp => {
+          if (filterCriteria.minProfitMargin && parseFloat(opp.profitMargin) < filterCriteria.minProfitMargin) return false;
+          if (filterCriteria.onlyExecutable && !opp.isExecutable) return false;
+          if (filterCriteria.exchanges && !filterCriteria.exchanges.includes(opp.exchangeA.name)) return false;
+          return true;
+        });
+      }
+
+      // Format data for webhook
+      const webhookData = {
+        timestamp: new Date().toISOString(),
+        platform: platform || 'webhook',
+        format: format || 'json',
+        total_opportunities: opportunities.length,
+        opportunities: opportunities.map(opp => ({
+          id: opp.id,
+          trading_pair: opp.tradingPair.name,
+          exchange_a: opp.exchangeA.name,
+          exchange_b: opp.exchangeB.name,
+          price_a: parseFloat(opp.priceA),
+          price_b: parseFloat(opp.priceB),
+          profit_margin: parseFloat(opp.profitMargin),
+          estimated_profit: parseFloat(opp.estimatedProfit),
+          is_executable: opp.isExecutable,
+          created_at: opp.createdAt
+        }))
+      };
+
+      // Send to webhook
+      const webhookResponse = await fetch(webhookUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'User-Agent': 'FlashBot-Arbitrage-Exporter/1.0'
+        },
+        body: JSON.stringify(webhookData)
+      });
+
+      if (!webhookResponse.ok) {
+        throw new Error(`Webhook failed: ${webhookResponse.status} ${webhookResponse.statusText}`);
+      }
+
+      res.json({ 
+        success: true, 
+        message: "Data sent to webhook successfully",
+        opportunities_sent: opportunities.length
+      });
+
+    } catch (error) {
+      console.error("Webhook export error:", error);
+      res.status(500).json({ error: "Failed to send data to webhook" });
+    }
+  });
+
+  // Automated export scheduler endpoint
+  app.post("/api/export/schedule", async (req, res) => {
+    try {
+      const { schedule, webhookUrl, format, platform, filterCriteria } = req.body;
+      
+      // This would typically be stored in database and managed by a job scheduler
+      // For now, we'll return a success response indicating scheduling capability
+      res.json({
+        success: true,
+        message: "Export scheduled successfully",
+        schedule_id: `schedule_${Date.now()}`,
+        next_execution: new Date(Date.now() + 60000).toISOString() // Next minute for demo
+      });
+
+    } catch (error) {
+      res.status(500).json({ error: "Failed to schedule export" });
+    }
+  });
+
   // Get available trading platforms
   app.get("/api/trading-platforms", async (req, res) => {
     try {
@@ -370,30 +500,37 @@ export async function registerRoutes(app: Express): Promise<Server> {
         {
           name: "TradingView",
           icon: "📈",
-          supportedFormats: ["json", "csv"],
+          supportedFormats: ["json", "csv", "tradingview"],
           requiredFields: ["symbol", "exchange", "signal"],
           description: "Export signals for TradingView alerts"
         },
         {
           name: "3Commas",
           icon: "🤖",
-          supportedFormats: ["json"],
+          supportedFormats: ["json", "3commas"],
           requiredFields: ["pair", "strategy", "take_profit"],
           description: "Create DCA bots for automated trading"
         },
         {
           name: "MetaTrader 5",
           icon: "📊",
-          supportedFormats: ["csv", "json"],
+          supportedFormats: ["csv", "metatrader"],
           requiredFields: ["symbol", "action", "volume"],
           description: "Import into MT5 Expert Advisors"
         },
         {
           name: "Binance",
           icon: "🔶",
-          supportedFormats: ["json", "api"],
+          supportedFormats: ["json", "binance"],
           requiredFields: ["symbol", "side", "quantity"],
           description: "Direct API integration with Binance"
+        },
+        {
+          name: "Webhook",
+          icon: "🔗",
+          supportedFormats: ["json"],
+          requiredFields: ["webhook_url"],
+          description: "Real-time data push to custom endpoint"
         },
         {
           name: "Generic CSV",

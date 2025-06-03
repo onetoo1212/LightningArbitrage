@@ -8,6 +8,7 @@ import { useState } from "react";
 import type { ArbitrageOpportunityWithDetails } from "@shared/schema";
 import { useToast } from "@/hooks/use-toast";
 import ExportModal from "@/components/export-modal";
+import QuickExportButtons from "@/components/quick-export-buttons";
 
 interface ArbitrageOpportunitiesProps {
   onRefresh: () => void;
@@ -236,6 +237,13 @@ export default function ArbitrageOpportunities({ onRefresh }: ArbitrageOpportuni
             </tbody>
           </table>
         </div>
+        
+        {/* Quick Export Footer */}
+        {filteredOpportunities.length > 0 && (
+          <div className="px-6 py-3 border-t border-border bg-background/50">
+            <QuickExportButtons opportunities={filteredOpportunities} />
+          </div>
+        )}
       </CardContent>
       
       <ExportModal 

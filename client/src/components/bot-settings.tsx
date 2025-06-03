@@ -8,6 +8,7 @@ import { queryClient } from "@/lib/queryClient";
 import { useState, useEffect } from "react";
 import { useToast } from "@/hooks/use-toast";
 import type { BotSettings } from "@shared/schema";
+import WebhookExport from "@/components/webhook-export";
 
 export default function BotSettings() {
   const { toast } = useToast();
@@ -19,6 +20,7 @@ export default function BotSettings() {
     autoExecuteEnabled: true,
     alertsEnabled: true
   });
+  const [showWebhookExport, setShowWebhookExport] = useState(false);
 
   const { data: botSettings } = useQuery<BotSettings>({
     queryKey: ["/api/settings"],
