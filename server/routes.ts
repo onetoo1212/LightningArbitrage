@@ -242,9 +242,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // Export opportunities endpoint
   app.post("/api/export", async (req, res) => {
-    const startTime = Date.now();
-    let exportLog;
-    
     try {
       const { format, platform, opportunityIds } = req.body;
       
@@ -399,40 +396,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
           return res.status(400).json({ error: "Unsupported export format" });
       }
 
-      // Log successful export
-      const executionTime = Date.now() - startTime;
-      const fileSize = Buffer.byteLength(exportData, 'utf8');
-      
-      await storage.logExport({
-        format,
-        platform,
-        opportunitiesCount: opportunities.length,
-        fileSize,
-        executionTime,
-        success: true,
-        userAgent: req.get('User-Agent') || 'Unknown',
-        ipAddress: req.ip || req.connection.remoteAddress || 'Unknown'
-      });
-
       res.setHeader('Content-Type', contentType);
       res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
       res.send(exportData);
 
     } catch (error) {
-      // Log failed export
-      const executionTime = Date.now() - startTime;
-      
-      await storage.logExport({
-        format: req.body.format || 'unknown',
-        platform: req.body.platform || 'unknown',
-        opportunitiesCount: 0,
-        executionTime,
-        success: false,
-        errorMessage: error instanceof Error ? error.message : 'Unknown error',
-        userAgent: req.get('User-Agent') || 'Unknown',
-        ipAddress: req.ip || req.connection.remoteAddress || 'Unknown'
-      });
-
       console.error("Export error:", error);
       res.status(500).json({ error: "Failed to export opportunities" });
     }
